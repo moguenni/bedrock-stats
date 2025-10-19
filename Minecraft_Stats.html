@@ -1,0 +1,294 @@
+<!--
+Datei: index.html
+Beschreibung: Moderne Ein-Seiten-Webseite -> Frontend-Prototyp für Minecraft Bedrock World-Statistiken.
+WICHTIG: Dieses Frontend ist ein Prototyp. Es zeigt UI, OAuth-Start und Visualisierungen.
+Backend-Endpunkte (müssen implementiert werden):
+  GET  /auth/microsoft         -> leitet zu Microsoft OAuth (Backend)
+  POST /api/connect-session    -> (optional) wechselt Session/CSRF
+  POST /api/start-analysis     -> body: { seed: string } startet Analyse (Backend)
+  GET  /api/stats/:sessionId   -> liefert JSON mit Stats
+  POST /api/upload-world      -> (optional) akzeptiert .mcworld zum Parsen
+
+Hinweise:
+- Seed alleine liefert NICHT spielerbezogene Statistiken (z.B. getötete Mobs). Seed bestimmt nur Welt-Generierung.
+- Für Aktivitäten (Kills, Blöcke platziert, gelaufene Distanz) brauchst du entweder
+    * Zugriff auf den Server, der Events loggt (empfohlen), oder
+    * Upload der Welt-/Spielerdaten zum Parsen, oder
+    * Integration mit Xbox Live / Microsoft APIs (falls die erforderlichen Daten freigegeben werden).
+
+Server-Ideen (vereinfacht, weiter unten ein Node/Express-Beispiel):
+- Bedrock-Server mit Behavior-Pack/Addon, das Spielerevents per HTTP an dein Backend schickt.
+- Spieler laden .mcworld hoch; Backend entpackt und liest LevelDB / player data.
+- Xbox Live API: OAuth 2.0 gegen Microsoft, danach Anfragen an Xbox Live Services (nicht automatisch verfügbar für alle Statistiken).
+
+-->
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Minecraft Bedrock World Stats — Prototype</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.3.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root{
+      --bg:#0f1724; --card:#0b1220; --muted:#9aa4b2; --accent:#7c3aed;
+      --glass: rgba(255,255,255,0.03);
+      font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:linear-gradient(180deg,#071023 0%,var(--bg) 100%);color:#e6eef6;min-height:100vh}
+    .container{max-width:1100px;margin:40px auto;padding:24px}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:22px}
+    .brand{display:flex;gap:12px;align-items:center}
+    .logo{width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,var(--accent),#2dd4bf);display:flex;align-items:center;justify-content:center;font-weight:800;color:#051024}
+    h1{font-size:20px;margin:0}
+    p.lead{margin:0;color:var(--muted);font-size:13px}
+
+    .grid{display:grid;grid-template-columns:1fr 420px;gap:20px}
+    .card{background:var(--card);border-radius:14px;padding:18px;box-shadow:0 6px 24px rgba(2,6,23,0.6);backdrop-filter:blur(6px)}
+
+    label{font-size:13px;color:var(--muted);display:block;margin-bottom:8px}
+    input[type=text], input[type=file]{width:100%;padding:12px;border-radius:10px;border:1px solid rgba(255,255,255,0.04);background:var(--glass);color:inherit}
+    .btn{display:inline-flex;gap:8px;align-items:center;padding:10px 14px;border-radius:10px;border:0;cursor:pointer}
+    .btn-primary{background:linear-gradient(90deg,var(--accent),#4f46e5);color:white}
+    .btn-ghost{background:transparent;border:1px solid rgba(255,255,255,0.06);color:var(--muted)}
+
+    .small{font-size:13px;color:var(--muted)}
+    .stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:12px}
+    .stat{background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);padding:12px;border-radius:10px}
+    .stat h3{margin:0;font-size:16px}
+    .stat p{margin:6px 0 0;color:var(--muted);font-size:13px}
+
+    .center{display:flex;align-items:center;justify-content:center}
+    footer{margin-top:18px;color:var(--muted);font-size:13px}
+
+    @media (max-width:980px){.grid{grid-template-columns:1fr}.container{padding:12px}}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="brand">
+        <div class="logo">MC</div>
+        <div>
+          <h1>Minecraft Bedrock World Stats</h1>
+          <p class="lead">Gib einen Seed ein, verbinde deinen Microsoft-Account und analysiere Welt- & Spielerdaten.</p>
+        </div>
+      </div>
+      <div>
+        <button id="connectBtn" class="btn btn-primary">Mit Microsoft verbinden</button>
+      </div>
+    </header>
+
+    <main class="grid">
+      <section class="card">
+        <h2 style="margin-top:0">Startanalyse</h2>
+        <p class="small">Seed eingeben oder Weltdatei hochladen.</p>
+
+        <div style="margin-top:12px">
+          <label for="seed">Minecraft Bedrock Seed</label>
+          <input id="seed" type="text" placeholder="z.B. 1234567890 oder -987654321" />
+        </div>
+
+        <div style="margin-top:12px;display:flex;gap:8px">
+          <button id="startBtn" class="btn btn-primary">Analyse starten</button>
+          <label class="btn btn-ghost" style="align-items:center">
+            Welt hochladen
+            <input id="worldUpload" type="file" accept=".mcworld,.zip" style="display:none" />
+          </label>
+        </div>
+
+        <div id="message" style="margin-top:12px" class="small">Hinweis: Seed liefert nur generative Infos. Für Spieler-statistiken sind zusätzliche Daten nötig.</div>
+
+        <div class="stats-grid" id="quickStats" style="margin-top:18px">
+          <div class="stat">
+            <h3 id="stat-chunks">—</h3>
+            <p>Chunks gescannt</p>
+          </div>
+          <div class="stat">
+            <h3 id="stat-players">—</h3>
+            <p>Spielerquellen</p>
+          </div>
+          <div class="stat">
+            <h3 id="stat-size">—</h3>
+            <p>Weltgröße</p>
+          </div>
+        </div>
+
+        <div style="margin-top:18px">
+          <h3 style="margin:0 0 8px 0">Live-Protokoll</h3>
+          <pre id="log" style="background:rgba(255,255,255,0.02);padding:10px;border-radius:8px;max-height:180px;overflow:auto;color:var(--muted)"></pre>
+        </div>
+      </section>
+
+      <aside class="card">
+        <h3 style="margin-top:0">Visualisierungen</h3>
+        <canvas id="chart1" style="width:100%;height:220px;margin-top:12px"></canvas>
+        <canvas id="chart2" style="width:100%;height:220px;margin-top:18px"></canvas>
+        <div style="margin-top:14px" class="center">
+          <button id="refreshBtn" class="btn btn-ghost">Aktualisieren</button>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="center">
+      <p>Prototype — Datenschutz & Sicherheit beachten. Du musst dem Zugriff explizit zustimmen.</p>
+    </footer>
+  </div>
+
+  <script>
+    // --- UI behaviour ---
+    const connectBtn = document.getElementById('connectBtn');
+    const startBtn = document.getElementById('startBtn');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const seedInput = document.getElementById('seed');
+    const log = document.getElementById('log');
+
+    // Chart.js Setup
+    const ctx1 = document.getElementById('chart1').getContext('2d');
+    const ctx2 = document.getElementById('chart2').getContext('2d');
+
+    const chart1 = new Chart(ctx1, {
+      type: 'bar',
+      data: {
+        labels: ['Zombies','Creeper','Skelette','Endermen','Spinnen'],
+        datasets: [{ label: 'Getötete Mobs', data: [0,0,0,0,0] }]
+      },
+      options: { responsive:true, maintainAspectRatio:false }
+    });
+
+    const chart2 = new Chart(ctx2, {
+      type: 'line',
+      data: { labels:['0'], datasets:[{label:'Gelaufene Strecke (m)', data:[0], fill:true}] },
+      options:{responsive:true, maintainAspectRatio:false}
+    });
+
+    function appendLog(s){ log.textContent += '['+new Date().toLocaleTimeString()+'] '+s+'\n'; log.scrollTop = log.scrollHeight; }
+
+    connectBtn.addEventListener('click',()=>{
+      // leitet auf Backend /auth/microsoft weiter, dort OAuth flow
+      appendLog('Öffne Microsoft-OAuth...');
+      window.location.href = '/auth/microsoft';
+    });
+
+    document.getElementById('worldUpload').addEventListener('change', async (e)=>{
+      const f = e.target.files[0];
+      if(!f) return;
+      appendLog('Weltdatei ausgewählt: '+f.name+' (Upload gestartet)');
+      const fd = new FormData(); fd.append('world', f);
+      try{
+        const res = await fetch('/api/upload-world', { method:'POST', body:fd });
+        const j = await res.json();
+        appendLog('Upload abgeschlossen: ' + (j.message||'ok'));
+        // update quick stats
+        document.getElementById('stat-size').textContent = j.worldSize || '—';
+      }catch(err){ appendLog('Upload fehlgeschlagen: '+err.message); }
+    });
+
+    startBtn.addEventListener('click', async ()=>{
+      const seed = seedInput.value.trim();
+      appendLog('Starte Analyse mit Seed: '+(seed||'[leer]'));
+      try{
+        const res = await fetch('/api/start-analysis', { method:'POST', headers:{'content-type':'application/json'}, body:JSON.stringify({seed}) });
+        const j = await res.json();
+        appendLog('Analyse gestartet, Session: '+(j.sessionId||'local'));
+        // polling example
+        pollStats(j.sessionId||null);
+      }catch(err){ appendLog('Fehler beim Starten: '+err.message); }
+    });
+
+    refreshBtn.addEventListener('click', ()=>{ appendLog('Manuelles Aktualisieren...'); pollStats(); });
+
+    let polling = false;
+    async function pollStats(sessionId){
+      if(polling) return; polling = true;
+      try{
+        const url = sessionId ? ('/api/stats/'+sessionId) : '/api/stats/latest';
+        for(let i=0;i<6;i++){
+          const res = await fetch(url);
+          if(!res.ok) { appendLog('Keine Stats verfügbar.'); break; }
+          const j = await res.json();
+          appendLog('Stats empfangen.');
+          // quick UI update
+          document.getElementById('stat-chunks').textContent = j.chunksScanned ?? '—';
+          document.getElementById('stat-players').textContent = (j.players??0)+' Spielerquellen';
+          if(j.worldSize) document.getElementById('stat-size').textContent = j.worldSize;
+          // update charts (safely)
+          if(j.mobsKilled){
+            chart1.data.datasets[0].data = [ j.mobsKilled.zombie||0, j.mobsKilled.creeper||0, j.mobsKilled.skeleton||0, j.mobsKilled.enderman||0, j.mobsKilled.spider||0 ];
+            chart1.update();
+          }
+          if(j.distance){ chart2.data.labels = ['gelaufen']; chart2.data.datasets[0].data = [ j.distance.walked||0 ]; chart2.update(); }
+
+          // if analysis finished -> break
+          if(j.status === 'done') { appendLog('Analyse beendet.'); break; }
+          await new Promise(r=>setTimeout(r,1500));
+        }
+      }catch(err){ appendLog('Fehler beim Abrufen der Stats: '+err.message); }
+      polling = false;
+    }
+
+    // Bootstrap demo: fülle mit Dummy-Daten, falls Backend fehlt
+    appendLog('Frontend-Prototype geladen. Wenn kein Backend vorhanden ist, bleiben API-Aufrufe Platzhalter.');
+    // Für lokale Demo: fülle Charts mit zufallsdaten
+    setTimeout(()=>{
+      chart1.data.datasets[0].data = [12,3,7,1,5]; chart1.update();
+      chart2.data.datasets[0].data = [3423]; chart2.update();
+      document.getElementById('stat-chunks').textContent = '5.234';
+      document.getElementById('stat-players').textContent = '2 Quellen';
+      document.getElementById('stat-size').textContent = '1.2 GB';
+    },600);
+  </script>
+
+  <!--
+  ----------------------------
+  Beispiel: Backend-Skizze (Node.js + Express)
+  ----------------------------
+  const express = require('express');
+  const fetch = require('node-fetch');
+  const multer = require('multer');
+  const upload = multer({ dest:'uploads/' });
+  const app = express();
+  app.use(express.json());
+
+  // 1) Microsoft OAuth Start
+  app.get('/auth/microsoft', (req,res)=>{
+    const clientId = process.env.MICROSOFT_CLIENT_ID;
+    const redirect = encodeURIComponent('https://yourdomain.com/auth/microsoft/callback');
+    const scope = encodeURIComponent('XboxLive.signin offline_access'); // Beispiele, anpassen
+    const url = `https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize?client_id=${clientId}&response_type=code&redirect_uri=${redirect}&scope=${scope}`;
+    res.redirect(url);
+  });
+
+  // 2) Upload endpoint (empfängt .mcworld) zum Entpacken & Parsen
+  app.post('/api/upload-world', upload.single('world'), async (req,res)=>{
+    // entpacken, LevelDB öffnen, Player-Daten auslesen -> eigene Implementierung
+    res.json({ message:'uploaded', worldSize:'1.2 GB' });
+  });
+
+  // 3) Start analysis (z.B. kick off job)
+  app.post('/api/start-analysis', (req,res)=>{
+    const { seed } = req.body;
+    // kick off worker: parse world, scan chunks, or request logs
+    const sessionId = 'sess_'+Date.now();
+    // store job and return id
+    res.json({ sessionId });
+  });
+
+  // 4) Get stats (simple polling)
+  app.get('/api/stats/:sid', (req,res)=>{
+    // return job progress or final stats JSON
+    res.json({ status:'done', chunksScanned:5234, players:2, worldSize:'1.2 GB', mobsKilled:{zombie:12,creeper:3,skeleton:7,enderman:1,spider:5}, distance:{walked:3423} });
+  });
+
+  app.listen(3000,()=>console.log('Listening'));
+
+  Hinweise zur Datenerhebung / Legal:
+  - Hol dir explizite Zustimmung bevor du Konten/Spielerdaten ausliest.
+  - Speichere OAuth-Tokens sicher (verschlüsselt). Verwende HTTPS in Produktion.
+  -->
+</body>
+</html>
